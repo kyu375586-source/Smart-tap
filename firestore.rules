@@ -1,0 +1,282 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (request.auth.token.email != null && request.auth.token.email == 'kyu375586@gmail.com')
+      );
+    }
+
+    function isValidUser(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.username is string && data.username.size() >= 1 && data.username.size() <= 50 &&
+             (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 100)) &&
+             (!('photoUrl' in data) || data.photoUrl == null || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
+             (!('referralCode' in data) || data.referralCode == null || (data.referralCode is string && data.referralCode.size() <= 50)) &&
+             (!('referredBy' in data) || data.referredBy == null || (data.referredBy is string && data.referredBy.size() <= 128)) &&
+             (!('currentLevel' in data) || data.currentLevel is int) &&
+             (!('totalTaps' in data) || data.totalTaps is int) &&
+             (!('totalEarnings' in data) || data.totalEarnings is int) &&
+             (!('role' in data) || data.role in ['user', 'admin']) &&
+             (!('status' in data) || data.status in ['active', 'suspended', 'restricted']) &&
+             (!('createdAt' in data) || (data.createdAt is timestamp && data.createdAt <= request.time)) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidBalance(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.coinBalance is int && data.coinBalance >= 0 &&
+             (!('withdrawableBalance' in data) || data.withdrawableBalance is int) &&
+             (!('lifetimeCoins' in data) || data.lifetimeCoins is int) &&
+             (!('pendingCoins' in data) || data.pendingCoins is int) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidEnergy(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.currentEnergy is int && data.currentEnergy >= 0 &&
+             data.maxEnergy is int && data.maxEnergy >= 1 &&
+             (!('lastRechargeTime' in data) || data.lastRechargeTime is int) &&
+             (!('rechargeRatePerSec' in data) || data.rechargeRatePerSec is int) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidCheckin(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.streakCount is int && data.streakCount >= 0 &&
+             data.lastClaimDate is string && data.lastClaimDate.size() <= 20 &&
+             (!('totalClaimedDays' in data) || data.totalClaimedDays is int) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidTask(data) {
+      return data.title is string && data.title.size() <= 100 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 500)) &&
+             (!('category' in data) || (data.category is string && data.category in ['daily', 'social', 'promo', 'special', 'referral'])) &&
+             data.rewardCoins is int && data.rewardCoins >= 0 &&
+             (!('actionUrl' in data) || (data.actionUrl is string && data.actionUrl.size() <= 300)) &&
+             (!('iconName' in data) || (data.iconName is string && data.iconName.size() <= 50)) &&
+             data.isActive is bool &&
+             (!('requirements' in data) || (data.requirements is string && data.requirements.size() <= 300)) &&
+             (!('createdAt' in data) || (data.createdAt is timestamp && data.createdAt <= request.time));
+    }
+
+    function isValidSubmission(data) {
+      return data.taskId is string && data.taskId.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.status in ['pending', 'approved', 'rejected'] &&
+             data.rewardCoins is int && data.rewardCoins >= 0 &&
+             (!('username' in data) || (data.username is string && data.username.size() <= 50)) &&
+             (!('taskTitle' in data) || (data.taskTitle is string && data.taskTitle.size() <= 100)) &&
+             (!('proofText' in data) || (data.proofText is string && data.proofText.size() <= 500)) &&
+             (!('proofUrl' in data) || (data.proofUrl is string && data.proofUrl.size() <= 500)) &&
+             (!('submittedAt' in data) || (data.submittedAt is timestamp && data.submittedAt <= request.time)) &&
+             (!('reviewedAt' in data) || (data.reviewedAt is timestamp && data.reviewedAt <= request.time)) &&
+             (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 128));
+    }
+
+    function isValidBooster(data) {
+      return data.name is string && data.name.size() <= 100 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 300)) &&
+             (!('multiplier' in data) || data.multiplier is int) &&
+             data.price is int && data.price >= 0 &&
+             (!('durationSeconds' in data) || data.durationSeconds is int) &&
+             data.boosterType is string && data.boosterType in ['multitap', 'energy_boost', 'energy_recovery', 'auto_tap'] &&
+             (!('upgradeLevel' in data) || data.upgradeLevel is int) &&
+             data.isActive is bool;
+    }
+
+    function isValidBoosterPurchase(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.boosterId is string && data.boosterId.size() <= 128 &&
+             (!('boosterName' in data) || (data.boosterName is string && data.boosterName.size() <= 100)) &&
+             data.isActive is bool &&
+             (!('purchasedAt' in data) || (data.purchasedAt is timestamp && data.purchasedAt <= request.time)) &&
+             (!('expiresAt' in data) || data.expiresAt is timestamp);
+    }
+
+    function isValidWithdrawal(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.coinAmount is int && data.coinAmount > 0 &&
+             (data.withdrawalAmount is int || data.withdrawalAmount is float) &&
+             data.paymentMethod is string && data.paymentMethod in ['PayPal', 'USDT', 'Bank Transfer', 'Gift Card'] &&
+             data.paymentDetails is string && data.paymentDetails.size() <= 300 &&
+             data.status in ['Pending', 'Under Review', 'Approved', 'Processing', 'Completed', 'Rejected'] &&
+             (!('conversionRate' in data) || data.conversionRate is int || data.conversionRate is float) &&
+             (!('username' in data) || (data.username is string && data.username.size() <= 50)) &&
+             (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 500)) &&
+             (!('transactionRef' in data) || (data.transactionRef is string && data.transactionRef.size() <= 100)) &&
+             (!('requestDate' in data) || (data.requestDate is timestamp && data.requestDate <= request.time)) &&
+             (!('processedDate' in data) || (data.processedDate is timestamp && data.processedDate <= request.time));
+    }
+
+    function isValidTransaction(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.type in ['tap_reward', 'task_reward', 'daily_bonus', 'referral_bonus', 'booster_purchase', 'withdrawal', 'admin_adjustment', 'ad_reward'] &&
+             data.amount is int &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 300)) &&
+             (!('status' in data) || data.status in ['completed', 'pending', 'failed']) &&
+             (!('balanceAfter' in data) || data.balanceAfter is int) &&
+             (!('createdAt' in data) || (data.createdAt is timestamp && data.createdAt <= request.time));
+    }
+
+    function isValidReferral(data) {
+      return data.referrerUid is string && data.referrerUid.size() <= 128 &&
+             data.referredUid is string && data.referredUid.size() <= 128 &&
+             data.rewardAmount is int && data.rewardAmount >= 0 &&
+             data.status in ['pending', 'qualified', 'claimed'] &&
+             (!('referredUsername' in data) || (data.referredUsername is string && data.referredUsername.size() <= 50)) &&
+             (!('createdAt' in data) || (data.createdAt is timestamp && data.createdAt <= request.time));
+    }
+
+    function isValidAnnouncement(data) {
+      return data.heading is string && data.heading.size() <= 120 &&
+             data.description is string && data.description.size() <= 600 &&
+             (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 500)) &&
+             (!('linkUrl' in data) || (data.linkUrl is string && data.linkUrl.size() <= 300)) &&
+             (!('actionText' in data) || (data.actionText is string && data.actionText.size() <= 50)) &&
+             data.isActive is bool &&
+             (!('createdAt' in data) || (data.createdAt is timestamp && data.createdAt <= request.time));
+    }
+
+    function isValidAppConfig(data) {
+      return data.appName is string && data.appName.size() <= 50 &&
+             data.coinsPerTap is int && data.coinsPerTap >= 1 &&
+             data.baseEnergy is int && data.baseEnergy >= 10 &&
+             data.energyPerTap is int && data.energyPerTap >= 1 &&
+             data.minWithdrawalCoins is int && data.minWithdrawalCoins >= 1 &&
+             data.version is int &&
+             (!('energyRegenPerSec' in data) || data.energyRegenPerSec is int) &&
+             (!('dailyRewardSchedule' in data) || (data.dailyRewardSchedule is string && data.dailyRewardSchedule.size() <= 500)) &&
+             (!('referralReward' in data) || data.referralReward is int) &&
+             (!('coinToUsdRate' in data) || (data.coinToUsdRate is int || data.coinToUsdRate is float)) &&
+             (!('maintenanceMode' in data) || data.maintenanceMode is bool) &&
+             (!('bannerNotice' in data) || (data.bannerNotice is string && data.bannerNotice.size() <= 300)) &&
+             (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 128)) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    // MATCH RULES
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && incoming().userId == userId && isValidUser(incoming());
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && incoming().userId == existing().userId && isValidUser(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /user_balances/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && incoming().userId == userId && isValidBalance(incoming());
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && incoming().userId == existing().userId && isValidBalance(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /energy_records/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && incoming().userId == userId && isValidEnergy(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /daily_checkins/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && incoming().userId == userId && isValidCheckin(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /tasks/{taskId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create, update, delete: if isAdmin() && isValidTask(incoming());
+    }
+
+    match /task_submissions/{submissionId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidSubmission(incoming());
+      allow update, delete: if isAdmin();
+    }
+
+    match /boosters/{boosterId} {
+      allow get, list: if isSignedIn();
+      allow create, update, delete: if isAdmin() && isValidBooster(incoming());
+    }
+
+    match /booster_purchases/{purchaseId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidBoosterPurchase(incoming());
+      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /withdrawals/{withdrawalId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidWithdrawal(incoming()) && incoming().status == 'Pending';
+      allow update, delete: if isAdmin();
+    }
+
+    match /transactions/{transactionId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidTransaction(incoming());
+      allow update, delete: if isAdmin();
+    }
+
+    match /referrals/{referralId} {
+      allow get: if isSignedIn() && (resource.data.referrerUid == request.auth.uid || resource.data.referredUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.referrerUid == request.auth.uid || resource.data.referredUid == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && (incoming().referrerUid == request.auth.uid || incoming().referredUid == request.auth.uid || isAdmin()) && isValidReferral(incoming());
+      allow update, delete: if isAdmin();
+    }
+
+    match /announcements/{announcementId} {
+      allow get, list: if isSignedIn();
+      allow create, update, delete: if isAdmin() && isValidAnnouncement(incoming());
+    }
+
+    match /app_configuration/{configId} {
+      allow get, list: if isSignedIn();
+      allow create, update, delete: if isAdmin() && isValidAppConfig(incoming());
+    }
+
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && (request.auth.uid == adminUid || isAdmin());
+      allow list, create, update, delete: if isAdmin();
+    }
+
+    match /admin_activity_logs/{logId} {
+      allow get, list, create: if isAdmin();
+      allow update, delete: if false;
+    }
+  }
+}

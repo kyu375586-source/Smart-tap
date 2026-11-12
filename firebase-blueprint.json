@@ -1,0 +1,259 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "User profile and identity record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Unique Firebase Auth UID" },
+        "username": { "type": "string", "description": "Display name" },
+        "email": { "type": "string", "format": "email", "description": "User email address" },
+        "photoUrl": { "type": "string", "description": "Avatar URL" },
+        "referralCode": { "type": "string", "description": "Unique referral code" },
+        "referredBy": { "type": "string", "description": "Referrer UID or code" },
+        "currentLevel": { "type": "integer", "description": "Tapping level" },
+        "totalTaps": { "type": "integer", "description": "Lifetime taps executed" },
+        "totalEarnings": { "type": "integer", "description": "Lifetime coins earned" },
+        "role": { "type": "string", "enum": ["user", "admin"], "description": "User authorization role" },
+        "status": { "type": "string", "enum": ["active", "suspended", "restricted"], "description": "Account status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp via serverTimestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp via serverTimestamp" }
+      },
+      "required": ["userId", "username", "createdAt"]
+    },
+    "UserBalance": {
+      "title": "User Balance",
+      "description": "Authoritative coin balance for a user",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID" },
+        "coinBalance": { "type": "integer", "description": "Current spendable coins" },
+        "withdrawableBalance": { "type": "integer", "description": "Coins eligible for withdrawal" },
+        "lifetimeCoins": { "type": "integer", "description": "Total lifetime coins earned" },
+        "pendingCoins": { "type": "integer", "description": "Pending reward coins" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp via serverTimestamp" }
+      },
+      "required": ["userId", "coinBalance"]
+    },
+    "EnergyRecord": {
+      "title": "Energy Record",
+      "description": "Energy capacity and regeneration tracking",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID" },
+        "currentEnergy": { "type": "integer", "description": "Current available energy points" },
+        "maxEnergy": { "type": "integer", "description": "Maximum energy capacity" },
+        "lastRechargeTime": { "type": "integer", "description": "Epoch ms of last recharge calculation" },
+        "rechargeRatePerSec": { "type": "integer", "description": "Energy regenerated per second" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp via serverTimestamp" }
+      },
+      "required": ["userId", "currentEnergy", "maxEnergy"]
+    },
+    "DailyCheckin": {
+      "title": "Daily Checkin",
+      "description": "User daily visit streak and claim record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID" },
+        "streakCount": { "type": "integer", "description": "Current consecutive days streak" },
+        "lastClaimDate": { "type": "string", "description": "ISO date YYYY-MM-DD of last checkin" },
+        "totalClaimedDays": { "type": "integer", "description": "Total checkins claimed" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp via serverTimestamp" }
+      },
+      "required": ["userId", "streakCount", "lastClaimDate"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "Reward task or challenge",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Task title" },
+        "description": { "type": "string", "description": "Task instructions" },
+        "category": { "type": "string", "enum": ["daily", "social", "promo", "special", "referral"], "description": "Category" },
+        "rewardCoins": { "type": "integer", "description": "Coin payout" },
+        "actionUrl": { "type": "string", "description": "URL to visit" },
+        "iconName": { "type": "string", "description": "Icon identifier" },
+        "isActive": { "type": "boolean", "description": "Whether task is open" },
+        "requirements": { "type": "string", "description": "Rules to qualify" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp via serverTimestamp" }
+      },
+      "required": ["title", "rewardCoins", "isActive"]
+    },
+    "TaskSubmission": {
+      "title": "Task Submission",
+      "description": "User proof submission for a task",
+      "type": "object",
+      "properties": {
+        "taskId": { "type": "string", "description": "Target task document ID" },
+        "userId": { "type": "string", "description": "Firebase Auth UID of applicant" },
+        "username": { "type": "string", "description": "Applicant username" },
+        "taskTitle": { "type": "string", "description": "Title of task" },
+        "proofText": { "type": "string", "description": "User note or transaction code" },
+        "proofUrl": { "type": "string", "description": "Screenshot or profile proof URL" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"], "description": "Verification status" },
+        "rewardCoins": { "type": "integer", "description": "Coins claimed" },
+        "submittedAt": { "type": "string", "format": "date-time", "description": "Submission timestamp" },
+        "reviewedAt": { "type": "string", "format": "date-time", "description": "Review timestamp" },
+        "reviewedBy": { "type": "string", "description": "Admin UID who reviewed" }
+      },
+      "required": ["taskId", "userId", "status", "rewardCoins", "submittedAt"]
+    },
+    "Booster": {
+      "title": "Booster",
+      "description": "Tapping booster or upgrade definition",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Booster name" },
+        "description": { "type": "string", "description": "Booster effect description" },
+        "multiplier": { "type": "integer", "description": "Coin or energy multiplier" },
+        "price": { "type": "integer", "description": "Coin purchase price" },
+        "durationSeconds": { "type": "integer", "description": "Active effect duration in seconds" },
+        "boosterType": { "type": "string", "enum": ["multitap", "energy_boost", "energy_recovery", "auto_tap"], "description": "Effect type" },
+        "upgradeLevel": { "type": "integer", "description": "Level tier" },
+        "isActive": { "type": "boolean", "description": "Availability" }
+      },
+      "required": ["name", "price", "boosterType", "isActive"]
+    },
+    "BoosterPurchase": {
+      "title": "Booster Purchase",
+      "description": "Purchased active booster for a user",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID" },
+        "boosterId": { "type": "string", "description": "Purchased booster definition ID" },
+        "boosterName": { "type": "string", "description": "Booster name" },
+        "purchasedAt": { "type": "string", "format": "date-time", "description": "Purchase timestamp" },
+        "expiresAt": { "type": "string", "format": "date-time", "description": "Expiration timestamp" },
+        "isActive": { "type": "boolean", "description": "Active state" }
+      },
+      "required": ["userId", "boosterId", "purchasedAt", "isActive"]
+    },
+    "Withdrawal": {
+      "title": "Withdrawal",
+      "description": "User payout withdrawal request",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Applicant UID" },
+        "username": { "type": "string", "description": "Applicant username" },
+        "coinAmount": { "type": "integer", "description": "Coins deducted" },
+        "conversionRate": { "type": "number", "description": "USD per coin" },
+        "withdrawalAmount": { "type": "number", "description": "Payout amount in USD" },
+        "paymentMethod": { "type": "string", "enum": ["PayPal", "USDT", "Bank Transfer", "Gift Card"], "description": "Payout channel" },
+        "paymentDetails": { "type": "string", "description": "Account number, email, or address" },
+        "status": { "type": "string", "enum": ["Pending", "Under Review", "Approved", "Processing", "Completed", "Rejected"], "description": "Workflow state" },
+        "requestDate": { "type": "string", "format": "date-time", "description": "Request timestamp" },
+        "processedDate": { "type": "string", "format": "date-time", "description": "Resolution timestamp" },
+        "adminNotes": { "type": "string", "description": "Admin notes" },
+        "transactionRef": { "type": "string", "description": "External reference ID" }
+      },
+      "required": ["userId", "coinAmount", "withdrawalAmount", "paymentMethod", "paymentDetails", "status", "requestDate"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Financial ledger entry for coin activity",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner UID" },
+        "type": { "type": "string", "enum": ["tap_reward", "task_reward", "daily_bonus", "referral_bonus", "booster_purchase", "withdrawal", "admin_adjustment", "ad_reward"], "description": "Transaction category" },
+        "amount": { "type": "integer", "description": "Signed delta or positive magnitude" },
+        "description": { "type": "string", "description": "Readable summary" },
+        "status": { "type": "string", "enum": ["completed", "pending", "failed"], "description": "Status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp via serverTimestamp" },
+        "balanceAfter": { "type": "integer", "description": "Snapshot balance after operation" }
+      },
+      "required": ["userId", "type", "amount", "createdAt"]
+    },
+    "Referral": {
+      "title": "Referral",
+      "description": "Invited user referral tracking",
+      "type": "object",
+      "properties": {
+        "referrerUid": { "type": "string", "description": "Inviting user UID" },
+        "referredUid": { "type": "string", "description": "New user UID" },
+        "referredUsername": { "type": "string", "description": "New user display name" },
+        "rewardAmount": { "type": "integer", "description": "Reward coins" },
+        "status": { "type": "string", "enum": ["pending", "qualified", "claimed"], "description": "Referral reward status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["referrerUid", "referredUid", "rewardAmount", "status", "createdAt"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "System or promotional announcement",
+      "type": "object",
+      "properties": {
+        "heading": { "type": "string", "description": "Headline" },
+        "description": { "type": "string", "description": "Body message" },
+        "imageUrl": { "type": "string", "description": "Banner graphic URL" },
+        "linkUrl": { "type": "string", "description": "External target URL" },
+        "actionText": { "type": "string", "description": "CTA button label" },
+        "isActive": { "type": "boolean", "description": "Visibility flag" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["heading", "description", "isActive", "createdAt"]
+    },
+    "AppConfiguration": {
+      "title": "App Configuration",
+      "description": "Remote application configuration and dynamic parameters",
+      "type": "object",
+      "properties": {
+        "appName": { "type": "string", "description": "Display name" },
+        "coinsPerTap": { "type": "integer", "description": "Coins awarded per tap" },
+        "baseEnergy": { "type": "integer", "description": "Initial max energy" },
+        "energyPerTap": { "type": "integer", "description": "Energy spent per tap" },
+        "energyRegenPerSec": { "type": "integer", "description": "Energy regenerated per second" },
+        "dailyRewardSchedule": { "type": "string", "description": "Comma-separated or JSON reward schedule" },
+        "referralReward": { "type": "integer", "description": "Coins awarded per qualifying referral" },
+        "minWithdrawalCoins": { "type": "integer", "description": "Minimum coins needed to withdraw" },
+        "coinToUsdRate": { "type": "number", "description": "Conversion rate from coins to USD" },
+        "maintenanceMode": { "type": "boolean", "description": "Lock app for maintenance" },
+        "bannerNotice": { "type": "string", "description": "Urgent alert message" },
+        "updatedBy": { "type": "string", "description": "Admin UID or email who published" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Publish timestamp" },
+        "version": { "type": "integer", "description": "Configuration version counter" }
+      },
+      "required": ["appName", "coinsPerTap", "baseEnergy", "energyPerTap", "minWithdrawalCoins", "version"]
+    },
+    "AdminRecord": {
+      "title": "Admin Record",
+      "description": "Authorized administrator whitelist record",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email", "description": "Authorized admin email" },
+        "role": { "type": "string", "enum": ["superadmin", "moderator"], "description": "Privilege level" },
+        "addedAt": { "type": "string", "format": "date-time", "description": "Authorization date" }
+      },
+      "required": ["email", "role"]
+    },
+    "AdminActivityLog": {
+      "title": "Admin Activity Log",
+      "description": "Auditable log of administrative interventions",
+      "type": "object",
+      "properties": {
+        "adminUid": { "type": "string", "description": "Administrator UID" },
+        "adminEmail": { "type": "string", "description": "Administrator email" },
+        "action": { "type": "string", "description": "Action performed" },
+        "details": { "type": "string", "description": "JSON or text describing parameters" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Log timestamp" }
+      },
+      "required": ["adminUid", "adminEmail", "action", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": { "schema": "UserProfile", "description": "User profile document" },
+    "/user_balances/{userId}": { "schema": "UserBalance", "description": "Authoritative coin balance document" },
+    "/energy_records/{userId}": { "schema": "EnergyRecord", "description": "User energy record" },
+    "/daily_checkins/{userId}": { "schema": "DailyCheckin", "description": "User daily streak and claim record" },
+    "/tasks/{taskId}": { "schema": "Task", "description": "Public task definitions" },
+    "/task_submissions/{submissionId}": { "schema": "TaskSubmission", "description": "Submitted task proofs" },
+    "/boosters/{boosterId}": { "schema": "Booster", "description": "Available boosters" },
+    "/booster_purchases/{purchaseId}": { "schema": "BoosterPurchase", "description": "Active booster purchases" },
+    "/withdrawals/{withdrawalId}": { "schema": "Withdrawal", "description": "User withdrawal requests" },
+    "/transactions/{transactionId}": { "schema": "Transaction", "description": "User balance transactions" },
+    "/referrals/{referralId}": { "schema": "Referral", "description": "User referral records" },
+    "/announcements/{announcementId}": { "schema": "Announcement", "description": "System announcements" },
+    "/app_configuration/{configId}": { "schema": "AppConfiguration", "description": "Remote app configuration" },
+    "/admins/{adminUid}": { "schema": "AdminRecord", "description": "Authorized admin accounts" },
+    "/admin_activity_logs/{logId}": { "schema": "AdminActivityLog", "description": "Audit trail logs" }
+  }
+}

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<resources>
+    <string name="firestore_database_id" translatable="false">ai-studio-android-smarttap-0b8adc31-59ec-4f1b-a9b1-e56d09363ed5</string>
+    <string name="recaptcha_site_key" translatable="false">6LeWYhwuAAAAALN4fG4lAQt8omMQ-tKQyhKDntoN</string>
+</resources>
