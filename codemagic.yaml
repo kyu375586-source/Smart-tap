@@ -1,13 +1,11 @@
 workflows:
-  android-release-workflow:
+  android-release:
     name: Smart Tap Android Release APK Build
-    max_build_duration: 30
+    max_build_duration: 60
     instance_type: linux_x2
     environment:
       android_signing:
         - upload_keystore
-      groups:
-        - google_play
       vars:
         PACKAGE_NAME: "com.aistudio.smarttap.wvyxqm"
     triggering:
@@ -15,16 +13,17 @@ workflows:
         - push
         - tag
       branch_patterns:
-        - pattern: main
+        - pattern: 'main'
           include: true
-          source: true
     scripts:
-      - name: Set up local properties and Gradle permissions
+      - name: Build Android Release APK and Bundle
         script: |
-          chmod +x gradlew || true
-      - name: Build Android Release APK
-        script: |
-          gradle assembleRelease --stacktrace
+          chmod +x gradlew 2>/dev/null || true
+          if [ -f "./gradlew" ]; then
+            ./gradlew assembleRelease --stacktrace
+          else
+            gradle assembleRelease --stacktrace
+          fi
     artifacts:
       - app/build/outputs/apk/release/*.apk
       - app/build/outputs/bundle/release/*.aab

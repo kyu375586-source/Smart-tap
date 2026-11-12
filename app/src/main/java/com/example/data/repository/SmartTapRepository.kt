@@ -1,116 +1,103 @@
 package com.example.data.repository
 
 import android.content.Context
-import com.example.R
+import android.content.SharedPreferences
+import android.util.Log
 import com.example.data.model.*
-import com.example.util.OperationType
-import com.example.util.handleFirestoreError
-import com.google.firebase.Firebase
-import com.google.firebase.Timestamp
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.FirebaseFirestoreException
-import com.google.firebase.firestore.Query
-import com.google.firebase.firestore.snapshots
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.channels.awaitClose
+import com.example.supabase.SupabaseClient
+import com.example.supabase.SupabaseSessionManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-class SmartTapRepository(val db: FirebaseFirestore) {
+class SmartTapRepository(private val context: Context) {
+    private val client = SupabaseClient(context)
+    private val sessionManager = SupabaseSessionManager.getInstance(context)
+    private val scope = CoroutineScope(Dispatchers.IO)
+    private val prefs: SharedPreferences =
+        context.applicationContext.getSharedPreferences("smart_tap_repo_prefs", Context.MODE_PRIVATE)
 
-    constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        )
-    )
+    // In-memory reactive state streams
+    private val _appConfig = MutableStateFlow(loadCachedAppConfig())
+    private val _userProfile = MutableStateFlow<UserProfile?>(null)
+    private val _userBalance = MutableStateFlow(UserBalance())
+    private val _energyRecord = MutableStateFlow(EnergyRecord())
+    private val _dailyCheckin = MutableStateFlow(DailyCheckin())
+    private val _tasks = MutableStateFlow<List<TaskItem>>(defaultTasks())
+    private val _userSubmissions = MutableStateFlow<List<TaskSubmission>>(emptyList())
+    private val _boosters = MutableStateFlow<List<Booster>>(defaultBoosters())
+    private val _userBoosters = MutableStateFlow<List<BoosterPurchase>>(emptyList())
+    private val _withdrawals = MutableStateFlow<List<WithdrawalRequest>>(emptyList())
+    private val _transactions = MutableStateFlow<List<TransactionItem>>(emptyList())
+    private val _leaderboard = MutableStateFlow<List<UserProfile>>(emptyList())
+    private val _announcements = MutableStateFlow<List<AnnouncementItem>>(defaultAnnouncements())
 
-    private val auth = Firebase.auth
+    // Admin state streams
+    private val _allUsers = MutableStateFlow<List<UserProfile>>(emptyList())
+    private val _allSubmissions = MutableStateFlow<List<TaskSubmission>>(emptyList())
+    private val _allWithdrawals = MutableStateFlow<List<WithdrawalRequest>>(emptyList())
 
-    fun requireUserId(): String {
-        return auth.currentUser?.uid
-            ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
+    init {
+        refreshGlobalData()
     }
 
-    fun isCurrentUserAdmin(): Boolean {
-        val email = auth.currentUser?.email
-        return email != null && email.equals("kyu375586@gmail.com", ignoreCase = true)
+    fun isCurrentUserAdmin(): Boolean = sessionManager.isUserAdmin()
+
+    private fun refreshGlobalData() {
+        scope.launch {
+            client.fetchAppConfig().onSuccess { _appConfig.value = it }
+            client.fetchAnnouncements().onSuccess { if (it.isNotEmpty()) _announcements.value = it }
+            client.fetchTasks().onSuccess { if (it.isNotEmpty()) _tasks.value = it }
+            client.fetchLeaderboard().onSuccess { if (it.isNotEmpty()) _leaderboard.value = it }
+        }
     }
 
     // -------------------------------------------------------------
     // REMOTE CONFIGURATION
     // -------------------------------------------------------------
-    fun observeAppConfig(): Flow<AppConfiguration> = callbackFlow {
-        val docRef = db.collection("app_configuration").document("default")
-        val listener = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.GET, docRef.path)
-                return@addSnapshotListener
-            }
-            if (snapshot != null && snapshot.exists()) {
-                val config = snapshot.toObject(AppConfiguration::class.java) ?: AppConfiguration()
-                trySend(config)
-            } else {
-                // Return default configuration
-                val defaultConfig = AppConfiguration()
-                trySend(defaultConfig)
-            }
-        }
-        awaitClose { listener.remove() }
-    }
+    fun observeAppConfig(): Flow<AppConfiguration> = _appConfig.asStateFlow()
 
     suspend fun saveAppConfig(config: AppConfiguration) {
-        val docRef = db.collection("app_configuration").document("default")
-        try {
-            val payload = mapOf(
-                "appName" to config.appName,
-                "coinsPerTap" to config.coinsPerTap,
-                "baseEnergy" to config.baseEnergy,
-                "energyPerTap" to config.energyPerTap,
-                "energyRegenPerSec" to config.energyRegenPerSec,
-                "dailyRewardSchedule" to config.dailyRewardSchedule,
-                "referralReward" to config.referralReward,
-                "minWithdrawalCoins" to config.minWithdrawalCoins,
-                "coinToUsdRate" to config.coinToUsdRate,
-                "maintenanceMode" to config.maintenanceMode,
-                "bannerNotice" to config.bannerNotice,
-                "updatedBy" to (auth.currentUser?.email ?: "admin"),
-                "updatedAt" to FieldValue.serverTimestamp(),
-                "version" to (config.version + 1)
-            )
-            docRef.set(payload).await()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
-            throw e
-        }
+        _appConfig.value = config
+        saveCachedAppConfig(config)
+        client.updateAppConfig(config)
+    }
+
+    private fun loadCachedAppConfig(): AppConfiguration {
+        return AppConfiguration(
+            coinsPerTap = prefs.getLong("config_coins_per_tap", 1L),
+            baseEnergy = prefs.getLong("config_base_energy", 1000L),
+            energyRegenPerSec = prefs.getLong("config_energy_regen", 3L),
+            coinToUsdRate = prefs.getFloat("config_rate", 0.0001f).toDouble(),
+            minWithdrawalCoins = prefs.getLong("config_min_withdrawal", 50000L),
+            maintenanceMode = prefs.getBoolean("config_maintenance", false),
+            bannerNotice = prefs.getString("config_banner", "Welcome to SMART TAP! Tap to earn digital rewards.") ?: ""
+        )
+    }
+
+    private fun saveCachedAppConfig(config: AppConfiguration) {
+        prefs.edit()
+            .putLong("config_coins_per_tap", config.coinsPerTap)
+            .putLong("config_base_energy", config.baseEnergy)
+            .putLong("config_energy_regen", config.energyRegenPerSec)
+            .putFloat("config_rate", config.coinToUsdRate.toFloat())
+            .putLong("config_min_withdrawal", config.minWithdrawalCoins)
+            .putBoolean("config_maintenance", config.maintenanceMode)
+            .putString("config_banner", config.bannerNotice)
+            .apply()
     }
 
     // -------------------------------------------------------------
     // USER PROFILE & INITIALIZATION
     // -------------------------------------------------------------
-    fun observeUserProfile(userId: String): Flow<UserProfile?> = callbackFlow {
-        val docRef = db.collection("users").document(userId)
-        val listener = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.GET, docRef.path)
-                return@addSnapshotListener
-            }
-            val profile = snapshot?.toObject(UserProfile::class.java)
-            trySend(profile)
-        }
-        awaitClose { listener.remove() }
-    }
+    fun observeUserProfile(userId: String): Flow<UserProfile?> = _userProfile.asStateFlow()
 
     suspend fun initializeUserIfMissing(
         userId: String,
@@ -118,947 +105,370 @@ class SmartTapRepository(val db: FirebaseFirestore) {
         email: String?,
         photoUrl: String?
     ) {
-        val userDoc = db.collection("users").document(userId)
-        val snapshot = try {
-            userDoc.get().await()
-        } catch (e: Exception) {
-            null
-        }
+        val cachedCoins = prefs.getLong("user_coins_$userId", 100L)
+        val cachedTotal = prefs.getLong("user_total_$userId", 100L)
+        val cachedTaps = prefs.getLong("user_taps_$userId", 0L)
+        val cachedEnergy = prefs.getLong("user_energy_$userId", _appConfig.value.baseEnergy)
 
-        if (snapshot == null || !snapshot.exists()) {
-            val username = displayName?.ifBlank { "Tapper_${userId.take(5)}" } ?: "Tapper_${userId.take(5)}"
-            val referralCode = "TAP_${userId.take(6).uppercase()}"
-            val isAdmin = email.equals("kyu375586@gmail.com", ignoreCase = true)
-            val role = if (isAdmin) "admin" else "user"
+        val initialProfile = UserProfile(
+            id = userId,
+            userId = userId,
+            username = displayName ?: email?.substringBefore("@") ?: "Player_${userId.take(6)}",
+            email = email,
+            photoUrl = photoUrl,
+            referralCode = "REF${userId.take(6).uppercase()}",
+            role = if (email.equals(SupabaseSessionManager.ADMIN_EMAIL, ignoreCase = true)) "admin" else "user",
+            status = "active",
+            totalTaps = cachedTaps,
+            totalEarnings = cachedTotal
+        )
+        _userProfile.value = initialProfile
+        _userBalance.value = UserBalance(
+            id = userId,
+            userId = userId,
+            coinBalance = cachedCoins,
+            lifetimeCoins = cachedTotal,
+            withdrawableBalance = cachedCoins
+        )
+        _energyRecord.value = EnergyRecord(
+            id = userId,
+            userId = userId,
+            currentEnergy = cachedEnergy,
+            maxEnergy = _appConfig.value.baseEnergy
+        )
 
-            val userMap = mapOf(
-                "userId" to userId,
-                "username" to username,
-                "email" to (email ?: ""),
-                "photoUrl" to (photoUrl ?: ""),
-                "referralCode" to referralCode,
-                "referredBy" to "",
-                "currentLevel" to 1,
-                "totalTaps" to 0L,
-                "totalEarnings" to 0L,
-                "role" to role,
-                "status" to "active",
-                "createdAt" to FieldValue.serverTimestamp(),
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            userDoc.set(userMap).await()
-
-            // Initialize balance
-            val balanceDoc = db.collection("user_balances").document(userId)
-            val balanceMap = mapOf(
-                "userId" to userId,
-                "coinBalance" to 0L,
-                "withdrawableBalance" to 0L,
-                "lifetimeCoins" to 0L,
-                "pendingCoins" to 0L,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            balanceDoc.set(balanceMap).await()
-
-            // Initialize energy
-            val energyDoc = db.collection("energy_records").document(userId)
-            val energyMap = mapOf(
-                "userId" to userId,
-                "currentEnergy" to 1000L,
-                "maxEnergy" to 1000L,
-                "lastRechargeTime" to System.currentTimeMillis(),
-                "rechargeRatePerSec" to 3L,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            energyDoc.set(energyMap).await()
-
-            // Initialize daily checkin
-            val checkinDoc = db.collection("daily_checkins").document(userId)
-            val checkinMap = mapOf(
-                "userId" to userId,
-                "streakCount" to 0,
-                "lastClaimDate" to "",
-                "totalClaimedDays" to 0,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            checkinDoc.set(checkinMap).await()
-
-            // Welcome transaction
-            val txDoc = db.collection("transactions").document()
-            val txMap = mapOf(
-                "userId" to userId,
-                "type" to "tap_reward",
-                "amount" to 0L,
-                "description" to "Welcome to SMART TAP!",
-                "status" to "completed",
-                "balanceAfter" to 0L,
-                "createdAt" to FieldValue.serverTimestamp()
-            )
-            txDoc.set(txMap).await()
-        }
-    }
-
-    suspend fun updateUsername(userId: String, newName: String) {
-        val userDoc = db.collection("users").document(userId)
-        userDoc.update(
-            mapOf(
-                "username" to newName,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-        ).await()
-    }
-
-    // -------------------------------------------------------------
-    // BALANCES & TRANSACTIONS
-    // -------------------------------------------------------------
-    fun observeUserBalance(userId: String): Flow<UserBalance> = callbackFlow {
-        val docRef = db.collection("user_balances").document(userId)
-        val listener = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.GET, docRef.path)
-                return@addSnapshotListener
-            }
-            if (snapshot != null && snapshot.exists()) {
-                val balance = snapshot.toObject(UserBalance::class.java) ?: UserBalance(userId = userId)
-                trySend(balance)
+        // Try fetch from Supabase
+        client.fetchUserProfile(userId).onSuccess { fetched ->
+            if (fetched != null) {
+                _userProfile.value = fetched
             } else {
-                trySend(UserBalance(userId = userId))
+                client.upsertUserProfile(initialProfile)
             }
         }
-        awaitClose { listener.remove() }
+
+        client.fetchUserBalance(userId).onSuccess { fetchedBalance ->
+            if (fetchedBalance != null) {
+                _userBalance.value = fetchedBalance
+            }
+        }
+
+        client.fetchUserSubmissions(userId).onSuccess { _userSubmissions.value = it }
+        client.fetchUserWithdrawals(userId).onSuccess { _withdrawals.value = it }
+
+        if (isCurrentUserAdmin()) {
+            refreshAdminData()
+        }
     }
 
-    fun observeTransactions(userId: String): Flow<List<TransactionItem>> = callbackFlow {
-        val query = db.collection("transactions")
-            .whereEqualTo("userId", userId)
-            .orderBy("createdAt", Query.Direction.DESCENDING)
-            .limit(50)
-        val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.LIST, "transactions")
-                return@addSnapshotListener
-            }
-            val list = snapshot?.toObjects(TransactionItem::class.java).orEmpty()
-            trySend(list)
-        }
-        awaitClose { listener.remove() }
-    }
-
-    // -------------------------------------------------------------
-    // ENERGY SYSTEM & TAPPING SYNC
-    // -------------------------------------------------------------
-    fun observeEnergy(userId: String): Flow<EnergyRecord> = callbackFlow {
-        val docRef = db.collection("energy_records").document(userId)
-        val listener = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.GET, docRef.path)
-                return@addSnapshotListener
-            }
-            if (snapshot != null && snapshot.exists()) {
-                val record = snapshot.toObject(EnergyRecord::class.java) ?: EnergyRecord(userId = userId)
-                trySend(record)
-            } else {
-                trySend(EnergyRecord(userId = userId))
-            }
-        }
-        awaitClose { listener.remove() }
-    }
+    fun observeUserBalance(userId: String): Flow<UserBalance> = _userBalance.asStateFlow()
 
     suspend fun syncTaps(
         userId: String,
-        tapsCount: Int,
+        tapsToAdd: Int,
         coinsEarned: Long,
         remainingEnergy: Long,
         maxEnergy: Long
     ) {
-        if (tapsCount <= 0) return
-        val balanceRef = db.collection("user_balances").document(userId)
-        val energyRef = db.collection("energy_records").document(userId)
-        val userRef = db.collection("users").document(userId)
+        val currentBalance = _userBalance.value
+        val newBalance = currentBalance.coinBalance + coinsEarned
+        val newLifetime = currentBalance.lifetimeCoins + coinsEarned
+        val currentProfile = _userProfile.value
+        val newTotalTaps = (currentProfile?.totalTaps ?: 0L) + tapsToAdd
 
-        db.runTransaction { transaction ->
-            val balanceSnap = transaction.get(balanceRef)
-            val currentCoins = balanceSnap.getLong("coinBalance") ?: 0L
-            val currentWithdrawable = balanceSnap.getLong("withdrawableBalance") ?: 0L
-            val currentLifetime = balanceSnap.getLong("lifetimeCoins") ?: 0L
+        _userBalance.value = currentBalance.copy(
+            coinBalance = newBalance,
+            lifetimeCoins = newLifetime,
+            withdrawableBalance = newBalance
+        )
+        _energyRecord.value = _energyRecord.value.copy(
+            currentEnergy = remainingEnergy,
+            maxEnergy = maxEnergy
+        )
+        _userProfile.value = currentProfile?.copy(
+            totalTaps = newTotalTaps,
+            totalEarnings = newLifetime
+        )
 
-            val newCoins = currentCoins + coinsEarned
-            val newWithdrawable = currentWithdrawable + coinsEarned
-            val newLifetime = currentLifetime + coinsEarned
+        // Cache locally
+        prefs.edit()
+            .putLong("user_coins_$userId", newBalance)
+            .putLong("user_total_$userId", newLifetime)
+            .putLong("user_taps_$userId", newTotalTaps)
+            .putLong("user_energy_$userId", remainingEnergy)
+            .apply()
 
-            transaction.update(
-                balanceRef,
-                mapOf(
-                    "coinBalance" to newCoins,
-                    "withdrawableBalance" to newWithdrawable,
-                    "lifetimeCoins" to newLifetime,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            )
-
-            transaction.update(
-                energyRef,
-                mapOf(
-                    "currentEnergy" to remainingEnergy.coerceIn(0L, maxEnergy),
-                    "lastRechargeTime" to System.currentTimeMillis(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            )
-
-            // Update user stats
-            transaction.update(
-                userRef,
-                mapOf(
-                    "totalTaps" to FieldValue.increment(tapsCount.toLong()),
-                    "totalEarnings" to newLifetime,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            )
-        }.await()
+        // Sync to Supabase
+        client.upsertUserBalance(userId, coinsEarned, newBalance, newTotalTaps, remainingEnergy, maxEnergy)
     }
 
-    suspend fun refillEnergy(userId: String, maxEnergy: Long) {
-        val energyRef = db.collection("energy_records").document(userId)
-        energyRef.update(
-            mapOf(
-                "currentEnergy" to maxEnergy,
-                "lastRechargeTime" to System.currentTimeMillis(),
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-        ).await()
+    suspend fun adjustUserBalanceAdmin(userId: String, amountCoins: Long, reason: String) {
+        val cur = _userBalance.value
+        val adjusted = (cur.coinBalance + amountCoins).coerceAtLeast(0L)
+        _userBalance.value = cur.copy(coinBalance = adjusted, lifetimeCoins = (cur.lifetimeCoins + amountCoins).coerceAtLeast(0L))
+        prefs.edit().putLong("user_coins_$userId", adjusted).apply()
+        client.upsertUserBalance(userId, amountCoins, adjusted, 0, 1000, 1000)
     }
 
-    // -------------------------------------------------------------
-    // DAILY CHECK-IN REWARDS
-    // -------------------------------------------------------------
-    fun observeDailyCheckin(userId: String): Flow<DailyCheckin> = callbackFlow {
-        val docRef = db.collection("daily_checkins").document(userId)
-        val listener = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.GET, docRef.path)
-                return@addSnapshotListener
-            }
-            val record = snapshot?.toObject(DailyCheckin::class.java) ?: DailyCheckin(userId = userId)
-            trySend(record)
-        }
-        awaitClose { listener.remove() }
+    fun observeEnergy(userId: String): Flow<EnergyRecord> = _energyRecord.asStateFlow()
+
+    suspend fun recordRewardedAdRecharge(userId: String) {
+        val max = _appConfig.value.baseEnergy
+        _energyRecord.value = _energyRecord.value.copy(currentEnergy = max)
+        val cur = _userBalance.value
+        val bonus = 250L
+        _userBalance.value = cur.copy(coinBalance = cur.coinBalance + bonus, lifetimeCoins = cur.lifetimeCoins + bonus)
+
+        prefs.edit()
+            .putLong("user_energy_$userId", max)
+            .putLong("user_coins_$userId", _userBalance.value.coinBalance)
+            .apply()
+
+        client.upsertUserBalance(userId, bonus, _userBalance.value.coinBalance, 0, max, max)
     }
 
-    suspend fun claimDailyCheckin(userId: String, schedule: List<Long>): Result<Long> {
+    fun observeDailyCheckin(userId: String): Flow<DailyCheckin> = _dailyCheckin.asStateFlow()
+
+    suspend fun claimDailyReward(userId: String): Long {
         val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-        val checkinRef = db.collection("daily_checkins").document(userId)
-        val balanceRef = db.collection("user_balances").document(userId)
-        val txRef = db.collection("transactions").document()
-
-        return try {
-            var rewardCoinsAwarded = 0L
-            db.runTransaction { tx ->
-                val checkinSnap = tx.get(checkinRef)
-                val lastDate = checkinSnap.getString("lastClaimDate") ?: ""
-                if (lastDate == todayStr) {
-                    throw IllegalStateException("Already claimed today!")
-                }
-
-                val currentStreak = (checkinSnap.getLong("streakCount") ?: 0L).toInt()
-                val totalDays = (checkinSnap.getLong("totalClaimedDays") ?: 0L).toInt()
-                val newStreak = (currentStreak % schedule.size) + 1
-                val reward = schedule.getOrElse(newStreak - 1) { 100L }
-                rewardCoinsAwarded = reward
-
-                tx.update(
-                    checkinRef,
-                    mapOf(
-                        "streakCount" to newStreak,
-                        "lastClaimDate" to todayStr,
-                        "totalClaimedDays" to (totalDays + 1),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
-
-                val balanceSnap = tx.get(balanceRef)
-                val coins = balanceSnap.getLong("coinBalance") ?: 0L
-                val withDr = balanceSnap.getLong("withdrawableBalance") ?: 0L
-                val life = balanceSnap.getLong("lifetimeCoins") ?: 0L
-                val newBalance = coins + reward
-
-                tx.update(
-                    balanceRef,
-                    mapOf(
-                        "coinBalance" to newBalance,
-                        "withdrawableBalance" to (withDr + reward),
-                        "lifetimeCoins" to (life + reward),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
-
-                tx.set(
-                    txRef,
-                    mapOf(
-                        "userId" to userId,
-                        "type" to "daily_bonus",
-                        "amount" to reward,
-                        "description" to "Day $newStreak Daily Check-in Bonus",
-                        "status" to "completed",
-                        "balanceAfter" to newBalance,
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }.await()
-            Result.success(rewardCoinsAwarded)
-        } catch (e: Exception) {
-            Result.failure(e)
+        val checkin = _dailyCheckin.value
+        if (checkin.lastClaimDate == todayStr) {
+            return 0L
         }
+
+        val newStreak = checkin.streakCount + 1
+        val rewardAmount = (newStreak * 250L).coerceAtMost(5000L)
+
+        _dailyCheckin.value = checkin.copy(
+            streakCount = newStreak,
+            lastClaimDate = todayStr,
+            totalClaimedDays = checkin.totalClaimedDays + 1
+        )
+
+        val cur = _userBalance.value
+        _userBalance.value = cur.copy(
+            coinBalance = cur.coinBalance + rewardAmount,
+            lifetimeCoins = cur.lifetimeCoins + rewardAmount
+        )
+
+        prefs.edit().putLong("user_coins_$userId", _userBalance.value.coinBalance).apply()
+        return rewardAmount
     }
 
     // -------------------------------------------------------------
     // TASKS & SUBMISSIONS
     // -------------------------------------------------------------
-    fun observeTasks(): Flow<List<TaskItem>> = callbackFlow {
-        val query = db.collection("tasks").whereEqualTo("isActive", true)
-        val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.LIST, "tasks")
-                return@addSnapshotListener
-            }
-            val list = snapshot?.toObjects(TaskItem::class.java).orEmpty()
-            trySend(list)
-        }
-        awaitClose { listener.remove() }
+    fun observeTasks(): Flow<List<TaskItem>> = _tasks.asStateFlow()
+
+    fun observeUserSubmissions(userId: String): Flow<List<TaskSubmission>> = _userSubmissions.asStateFlow()
+
+    suspend fun submitTaskProof(submission: TaskSubmission) {
+        _userSubmissions.value = listOf(submission) + _userSubmissions.value
+        client.submitTaskProof(submission)
     }
 
-    fun observeAllTasksAdmin(): Flow<List<TaskItem>> = callbackFlow {
-        val listener = db.collection("tasks").addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.LIST, "tasks")
-                return@addSnapshotListener
-            }
-            val list = snapshot?.toObjects(TaskItem::class.java).orEmpty()
-            trySend(list)
-        }
-        awaitClose { listener.remove() }
-    }
-
-    suspend fun saveTask(task: TaskItem) {
-        val docRef = if (task.id.isBlank()) db.collection("tasks").document() else db.collection("tasks").document(task.id)
-        val map = mapOf(
-            "title" to task.title,
-            "description" to task.description,
-            "category" to task.category,
-            "rewardCoins" to task.rewardCoins,
-            "actionUrl" to task.actionUrl,
-            "iconName" to task.iconName,
-            "isActive" to task.isActive,
-            "requirements" to task.requirements,
-            "createdAt" to FieldValue.serverTimestamp()
-        )
-        docRef.set(map).await()
+    suspend fun createTask(task: TaskItem) {
+        _tasks.value = listOf(task) + _tasks.value
+        client.saveTask(task)
     }
 
     suspend fun deleteTask(taskId: String) {
-        db.collection("tasks").document(taskId).delete().await()
+        _tasks.value = _tasks.value.filter { it.id != taskId }
+        client.deleteTask(taskId)
     }
 
-    fun observeUserSubmissions(userId: String): Flow<List<TaskSubmission>> = callbackFlow {
-        val query = db.collection("task_submissions").whereEqualTo("userId", userId)
-        val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.LIST, "task_submissions")
-                return@addSnapshotListener
-            }
-            val list = snapshot?.toObjects(TaskSubmission::class.java).orEmpty()
-            trySend(list)
+    // -------------------------------------------------------------
+    // BOOSTERS
+    // -------------------------------------------------------------
+    fun observeBoosters(): Flow<List<Booster>> = _boosters.asStateFlow()
+
+    fun observeUserActivePurchases(userId: String): Flow<List<BoosterPurchase>> = _userBoosters.asStateFlow()
+
+    suspend fun purchaseBooster(userId: String, booster: Booster) {
+        val curBalance = _userBalance.value.coinBalance
+        if (curBalance < booster.price) {
+            throw IllegalStateException("Insufficient coins to purchase ${booster.name}")
         }
-        awaitClose { listener.remove() }
-    }
 
-    fun observeAllSubmissionsAdmin(): Flow<List<TaskSubmission>> = callbackFlow {
-        val listener = db.collection("task_submissions")
-            .orderBy("submittedAt", Query.Direction.DESCENDING)
-            .limit(50)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    handleFirestoreError(error, OperationType.LIST, "task_submissions")
-                    return@addSnapshotListener
-                }
-                val list = snapshot?.toObjects(TaskSubmission::class.java).orEmpty()
-                trySend(list)
-            }
-        awaitClose { listener.remove() }
-    }
+        val newBalance = curBalance - booster.price
+        _userBalance.value = _userBalance.value.copy(coinBalance = newBalance)
+        prefs.edit().putLong("user_coins_$userId", newBalance).apply()
 
-    suspend fun submitTask(submission: TaskSubmission) {
-        val docRef = db.collection("task_submissions").document()
-        val map = mapOf(
-            "taskId" to submission.taskId,
-            "userId" to submission.userId,
-            "username" to submission.username,
-            "taskTitle" to submission.taskTitle,
-            "proofText" to submission.proofText,
-            "proofUrl" to submission.proofUrl,
-            "status" to "pending",
-            "rewardCoins" to submission.rewardCoins,
-            "submittedAt" to FieldValue.serverTimestamp()
+        val purchase = BoosterPurchase(
+            id = UUID.randomUUID().toString(),
+            userId = userId,
+            boosterId = booster.id,
+            boosterName = booster.name,
+            purchasedAt = System.currentTimeMillis(),
+            expiresAt = System.currentTimeMillis() + (booster.durationSeconds * 1000L)
         )
-        docRef.set(map).await()
-    }
-
-    suspend fun reviewTaskSubmission(
-        submissionId: String,
-        targetUserId: String,
-        approve: Boolean,
-        rewardCoins: Long,
-        adminUid: String
-    ) {
-        val subRef = db.collection("task_submissions").document(submissionId)
-        val balanceRef = db.collection("user_balances").document(targetUserId)
-        val txRef = db.collection("transactions").document()
-
-        db.runTransaction { tx ->
-            val status = if (approve) "approved" else "rejected"
-            tx.update(
-                subRef,
-                mapOf(
-                    "status" to status,
-                    "reviewedAt" to FieldValue.serverTimestamp(),
-                    "reviewedBy" to adminUid
-                )
-            )
-
-            if (approve && rewardCoins > 0) {
-                val balanceSnap = tx.get(balanceRef)
-                val coins = balanceSnap.getLong("coinBalance") ?: 0L
-                val withDr = balanceSnap.getLong("withdrawableBalance") ?: 0L
-                val life = balanceSnap.getLong("lifetimeCoins") ?: 0L
-                val newBal = coins + rewardCoins
-
-                tx.update(
-                    balanceRef,
-                    mapOf(
-                        "coinBalance" to newBal,
-                        "withdrawableBalance" to (withDr + rewardCoins),
-                        "lifetimeCoins" to (life + rewardCoins),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
-
-                tx.set(
-                    txRef,
-                    mapOf(
-                        "userId" to targetUserId,
-                        "type" to "task_reward",
-                        "amount" to rewardCoins,
-                        "description" to "Task Reward Approved",
-                        "status" to "completed",
-                        "balanceAfter" to newBal,
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }
-        }.await()
+        _userBoosters.value = listOf(purchase) + _userBoosters.value
     }
 
     // -------------------------------------------------------------
-    // BOOSTERS & UPGRADES
+    // WALLET & WITHDRAWALS
     // -------------------------------------------------------------
-    fun observeBoosters(): Flow<List<Booster>> = callbackFlow {
-        val listener = db.collection("boosters").whereEqualTo("isActive", true)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    handleFirestoreError(error, OperationType.LIST, "boosters")
-                    return@addSnapshotListener
-                }
-                val list = snapshot?.toObjects(Booster::class.java).orEmpty()
-                trySend(list)
-            }
-        awaitClose { listener.remove() }
-    }
+    fun observeUserWithdrawals(userId: String): Flow<List<WithdrawalRequest>> = _withdrawals.asStateFlow()
 
-    fun observeAllBoostersAdmin(): Flow<List<Booster>> = callbackFlow {
-        val listener = db.collection("boosters").addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.LIST, "boosters")
-                return@addSnapshotListener
-            }
-            val list = snapshot?.toObjects(Booster::class.java).orEmpty()
-            trySend(list)
-        }
-        awaitClose { listener.remove() }
-    }
-
-    suspend fun saveBooster(booster: Booster) {
-        val docRef = if (booster.id.isBlank()) db.collection("boosters").document() else db.collection("boosters").document(booster.id)
-        val map = mapOf(
-            "name" to booster.name,
-            "description" to booster.description,
-            "multiplier" to booster.multiplier,
-            "price" to booster.price,
-            "durationSeconds" to booster.durationSeconds,
-            "boosterType" to booster.boosterType,
-            "upgradeLevel" to booster.upgradeLevel,
-            "isActive" to booster.isActive
-        )
-        docRef.set(map).await()
-    }
-
-    suspend fun deleteBooster(boosterId: String) {
-        db.collection("boosters").document(boosterId).delete().await()
-    }
-
-    fun observeUserActivePurchases(userId: String): Flow<List<BoosterPurchase>> = callbackFlow {
-        val query = db.collection("booster_purchases")
-            .whereEqualTo("userId", userId)
-            .whereEqualTo("isActive", true)
-        val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.LIST, "booster_purchases")
-                return@addSnapshotListener
-            }
-            val list = snapshot?.toObjects(BoosterPurchase::class.java).orEmpty()
-            trySend(list)
-        }
-        awaitClose { listener.remove() }
-    }
-
-    suspend fun purchaseBooster(userId: String, booster: Booster): Result<Unit> {
-        val balanceRef = db.collection("user_balances").document(userId)
-        val purchaseRef = db.collection("booster_purchases").document()
-        val txRef = db.collection("transactions").document()
-
-        return try {
-            db.runTransaction { tx ->
-                val balanceSnap = tx.get(balanceRef)
-                val coins = balanceSnap.getLong("coinBalance") ?: 0L
-                if (coins < booster.price) {
-                    throw IllegalStateException("Insufficient coin balance (${coins} < ${booster.price})")
-                }
-
-                val newBal = coins - booster.price
-                tx.update(
-                    balanceRef,
-                    mapOf(
-                        "coinBalance" to newBal,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
-
-                val now = System.currentTimeMillis()
-                val expiresAt = Timestamp(Date(now + booster.durationSeconds * 1000))
-
-                tx.set(
-                    purchaseRef,
-                    mapOf(
-                        "userId" to userId,
-                        "boosterId" to booster.id,
-                        "boosterName" to booster.name,
-                        "isActive" to true,
-                        "purchasedAt" to FieldValue.serverTimestamp(),
-                        "expiresAt" to expiresAt
-                    )
-                )
-
-                tx.set(
-                    txRef,
-                    mapOf(
-                        "userId" to userId,
-                        "type" to "booster_purchase",
-                        "amount" to -booster.price,
-                        "description" to "Purchased ${booster.name}",
-                        "status" to "completed",
-                        "balanceAfter" to newBal,
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }.await()
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    // -------------------------------------------------------------
-    // WITHDRAWALS
-    // -------------------------------------------------------------
-    fun observeUserWithdrawals(userId: String): Flow<List<WithdrawalRequest>> = callbackFlow {
-        val query = db.collection("withdrawals")
-            .whereEqualTo("userId", userId)
-            .orderBy("requestDate", Query.Direction.DESCENDING)
-        val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.LIST, "withdrawals")
-                return@addSnapshotListener
-            }
-            val list = snapshot?.toObjects(WithdrawalRequest::class.java).orEmpty()
-            trySend(list)
-        }
-        awaitClose { listener.remove() }
-    }
-
-    fun observeAllWithdrawalsAdmin(): Flow<List<WithdrawalRequest>> = callbackFlow {
-        val query = db.collection("withdrawals").orderBy("requestDate", Query.Direction.DESCENDING).limit(100)
-        val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.LIST, "withdrawals")
-                return@addSnapshotListener
-            }
-            val list = snapshot?.toObjects(WithdrawalRequest::class.java).orEmpty()
-            trySend(list)
-        }
-        awaitClose { listener.remove() }
-    }
-
-    suspend fun submitWithdrawalRequest(
+    suspend fun requestWithdrawal(
         userId: String,
         username: String,
         coinAmount: Long,
-        usdAmount: Double,
-        rate: Double,
-        method: String,
-        details: String
-    ): Result<Unit> {
-        val balanceRef = db.collection("user_balances").document(userId)
-        val withRef = db.collection("withdrawals").document()
-        val txRef = db.collection("transactions").document()
-
-        return try {
-            db.runTransaction { tx ->
-                val balanceSnap = tx.get(balanceRef)
-                val coins = balanceSnap.getLong("coinBalance") ?: 0L
-                val withDr = balanceSnap.getLong("withdrawableBalance") ?: 0L
-                if (coins < coinAmount || withDr < coinAmount) {
-                    throw IllegalStateException("Insufficient withdrawable coin balance")
-                }
-
-                val newCoins = coins - coinAmount
-                val newWithDr = withDr - coinAmount
-
-                tx.update(
-                    balanceRef,
-                    mapOf(
-                        "coinBalance" to newCoins,
-                        "withdrawableBalance" to newWithDr,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
-
-                tx.set(
-                    withRef,
-                    mapOf(
-                        "userId" to userId,
-                        "username" to username,
-                        "coinAmount" to coinAmount,
-                        "conversionRate" to rate,
-                        "withdrawalAmount" to usdAmount,
-                        "paymentMethod" to method,
-                        "paymentDetails" to details,
-                        "status" to "Pending",
-                        "adminNotes" to "",
-                        "transactionRef" to "WTH-${UUID.randomUUID().toString().take(8).uppercase()}",
-                        "requestDate" to FieldValue.serverTimestamp()
-                    )
-                )
-
-                tx.set(
-                    txRef,
-                    mapOf(
-                        "userId" to userId,
-                        "type" to "withdrawal",
-                        "amount" to -coinAmount,
-                        "description" to "Withdrawal via $method ($$usdAmount)",
-                        "status" to "pending",
-                        "balanceAfter" to newCoins,
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }.await()
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    suspend fun updateWithdrawalStatus(
-        withdrawalId: String,
-        targetUserId: String,
-        coinAmount: Long,
-        newStatus: String,
-        notes: String
+        paymentMethod: String,
+        paymentDetails: String
     ) {
-        val withRef = db.collection("withdrawals").document(withdrawalId)
-        val balanceRef = db.collection("user_balances").document(targetUserId)
-
-        db.runTransaction { tx ->
-            tx.update(
-                withRef,
-                mapOf(
-                    "status" to newStatus,
-                    "adminNotes" to notes,
-                    "processedDate" to FieldValue.serverTimestamp()
-                )
-            )
-
-            // If rejected, refund the coins
-            if (newStatus == "Rejected") {
-                val balanceSnap = tx.get(balanceRef)
-                val coins = balanceSnap.getLong("coinBalance") ?: 0L
-                val withDr = balanceSnap.getLong("withdrawableBalance") ?: 0L
-                tx.update(
-                    balanceRef,
-                    mapOf(
-                        "coinBalance" to (coins + coinAmount),
-                        "withdrawableBalance" to (withDr + coinAmount),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }
-        }.await()
-    }
-
-    // -------------------------------------------------------------
-    // LEADERBOARD & USERS
-    // -------------------------------------------------------------
-    fun observeLeaderboard(): Flow<List<UserProfile>> = callbackFlow {
-        val query = db.collection("users")
-            .whereEqualTo("status", "active")
-            .limit(50)
-        val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.LIST, "users")
-                return@addSnapshotListener
-            }
-            val list = snapshot?.toObjects(UserProfile::class.java).orEmpty()
-                .sortedByDescending { it.totalEarnings }
-            trySend(list)
+        val min = _appConfig.value.minWithdrawalCoins
+        if (coinAmount < min) {
+            throw IllegalStateException("Minimum withdrawal is $min coins")
         }
-        awaitClose { listener.remove() }
-    }
-
-    fun observeAllUsersAdmin(): Flow<List<UserProfile>> = callbackFlow {
-        val listener = db.collection("users")
-            .limit(100)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    handleFirestoreError(error, OperationType.LIST, "users")
-                    return@addSnapshotListener
-                }
-                val list = snapshot?.toObjects(UserProfile::class.java).orEmpty()
-                trySend(list)
-            }
-        awaitClose { listener.remove() }
-    }
-
-    suspend fun adminAdjustBalance(targetUserId: String, delta: Long, reason: String) {
-        val balanceRef = db.collection("user_balances").document(targetUserId)
-        val userRef = db.collection("users").document(targetUserId)
-        val txRef = db.collection("transactions").document()
-
-        db.runTransaction { tx ->
-            val bSnap = tx.get(balanceRef)
-            val coins = bSnap.getLong("coinBalance") ?: 0L
-            val withDr = bSnap.getLong("withdrawableBalance") ?: 0L
-            val life = bSnap.getLong("lifetimeCoins") ?: 0L
-
-            val newCoins = (coins + delta).coerceAtLeast(0L)
-            val newWithDr = (withDr + delta).coerceAtLeast(0L)
-            val newLife = if (delta > 0) life + delta else life
-
-            tx.update(
-                balanceRef,
-                mapOf(
-                    "coinBalance" to newCoins,
-                    "withdrawableBalance" to newWithDr,
-                    "lifetimeCoins" to newLife,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            )
-
-            tx.update(
-                userRef,
-                mapOf(
-                    "totalEarnings" to newLife,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            )
-
-            tx.set(
-                txRef,
-                mapOf(
-                    "userId" to targetUserId,
-                    "type" to "admin_adjustment",
-                    "amount" to delta,
-                    "description" to "Admin Adjustment: $reason",
-                    "status" to "completed",
-                    "balanceAfter" to newCoins,
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-            )
-        }.await()
-    }
-
-    suspend fun adminSetUserStatus(targetUserId: String, newStatus: String) {
-        db.collection("users").document(targetUserId).update(
-            mapOf(
-                "status" to newStatus,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-        ).await()
-    }
-
-    // -------------------------------------------------------------
-    // ANNOUNCEMENTS
-    // -------------------------------------------------------------
-    fun observeAnnouncements(): Flow<List<AnnouncementItem>> = callbackFlow {
-        val query = db.collection("announcements").whereEqualTo("isActive", true)
-        val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.LIST, "announcements")
-                return@addSnapshotListener
-            }
-            val list = snapshot?.toObjects(AnnouncementItem::class.java).orEmpty()
-            trySend(list)
+        val curBalance = _userBalance.value.coinBalance
+        if (curBalance < coinAmount) {
+            throw IllegalStateException("Insufficient coin balance")
         }
-        awaitClose { listener.remove() }
-    }
 
-    suspend fun saveAnnouncement(item: AnnouncementItem) {
-        val docRef = if (item.id.isBlank()) db.collection("announcements").document() else db.collection("announcements").document(item.id)
-        val map = mapOf(
-            "heading" to item.heading,
-            "description" to item.description,
-            "imageUrl" to item.imageUrl,
-            "linkUrl" to item.linkUrl,
-            "actionText" to item.actionText,
-            "isActive" to item.isActive,
-            "createdAt" to FieldValue.serverTimestamp()
+        val usdVal = coinAmount * _appConfig.value.coinToUsdRate
+        val req = WithdrawalRequest(
+            id = UUID.randomUUID().toString(),
+            userId = userId,
+            username = username,
+            coinAmount = coinAmount,
+            withdrawalAmount = usdVal,
+            paymentMethod = paymentMethod,
+            paymentDetails = paymentDetails,
+            status = "Pending"
         )
-        docRef.set(map).await()
+
+        // Deduct coins
+        val newBal = curBalance - coinAmount
+        _userBalance.value = _userBalance.value.copy(coinBalance = newBal, withdrawableBalance = newBal)
+        prefs.edit().putLong("user_coins_$userId", newBal).apply()
+
+        _withdrawals.value = listOf(req) + _withdrawals.value
+        client.submitWithdrawal(req)
     }
 
-    suspend fun deleteAnnouncement(id: String) {
-        db.collection("announcements").document(id).delete().await()
+    fun observeTransactions(userId: String): Flow<List<TransactionItem>> = _transactions.asStateFlow()
+
+    fun observeLeaderboard(): Flow<List<UserProfile>> = _leaderboard.asStateFlow()
+
+    fun observeAnnouncements(): Flow<List<AnnouncementItem>> = _announcements.asStateFlow()
+
+    suspend fun createAnnouncement(announcement: AnnouncementItem) {
+        _announcements.value = listOf(announcement) + _announcements.value
+        client.saveAnnouncement(announcement)
     }
 
-    // -------------------------------------------------------------
-    // AD REWARD
-    // -------------------------------------------------------------
-    suspend fun awardAdBonus(userId: String, coins: Long, refillEnergy: Boolean, maxEnergy: Long) {
-        val balanceRef = db.collection("user_balances").document(userId)
-        val energyRef = db.collection("energy_records").document(userId)
-        val userRef = db.collection("users").document(userId)
-        val txRef = db.collection("transactions").document()
-
-        db.runTransaction { tx ->
-            val bSnap = tx.get(balanceRef)
-            val currentCoins = bSnap.getLong("coinBalance") ?: 0L
-            val currentWithDr = bSnap.getLong("withdrawableBalance") ?: 0L
-            val currentLife = bSnap.getLong("lifetimeCoins") ?: 0L
-
-            val newCoins = currentCoins + coins
-            val newWithDr = currentWithDr + coins
-            val newLife = currentLife + coins
-
-            tx.update(
-                balanceRef,
-                mapOf(
-                    "coinBalance" to newCoins,
-                    "withdrawableBalance" to newWithDr,
-                    "lifetimeCoins" to newLife,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            )
-
-            tx.update(
-                userRef,
-                mapOf(
-                    "totalEarnings" to newLife,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            )
-
-            if (refillEnergy) {
-                tx.update(
-                    energyRef,
-                    mapOf(
-                        "currentEnergy" to maxEnergy,
-                        "lastRechargeTime" to System.currentTimeMillis(),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }
-
-            tx.set(
-                txRef,
-                mapOf(
-                    "userId" to userId,
-                    "type" to "ad_reward",
-                    "amount" to coins,
-                    "description" to if (refillEnergy) "Rewarded Ad: Full Energy & $coins Coins" else "Rewarded Ad: $coins Coins",
-                    "status" to "completed",
-                    "balanceAfter" to newCoins,
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-            )
-        }.await()
+    suspend fun deleteAnnouncement(announcementId: String) {
+        _announcements.value = _announcements.value.filter { it.id != announcementId }
+        client.deleteAnnouncement(announcementId)
     }
 
     // -------------------------------------------------------------
-    // REFERRALS
+    // ADMIN OBSERVABLES & CONTROLS
     // -------------------------------------------------------------
-    fun observeReferrals(userId: String): Flow<List<ReferralItem>> = callbackFlow {
-        val query = db.collection("referrals").whereEqualTo("referrerUid", userId)
-        val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                handleFirestoreError(error, OperationType.LIST, "referrals")
-                return@addSnapshotListener
-            }
-            val list = snapshot?.toObjects(ReferralItem::class.java).orEmpty()
-            trySend(list)
+    fun observeAllUsersAdmin(): Flow<List<UserProfile>> = _allUsers.asStateFlow()
+
+    fun observeAllSubmissionsAdmin(): Flow<List<TaskSubmission>> = _allSubmissions.asStateFlow()
+
+    fun observeAllWithdrawalsAdmin(): Flow<List<WithdrawalRequest>> = _allWithdrawals.asStateFlow()
+
+    suspend fun refreshAdminData() {
+        client.fetchAllUsersAdmin().onSuccess { _allUsers.value = it }
+        client.fetchAllSubmissionsAdmin().onSuccess { _allSubmissions.value = it }
+        client.fetchAllWithdrawalsAdmin().onSuccess { _allWithdrawals.value = it }
+    }
+
+    suspend fun reviewTaskSubmission(submissionId: String, approve: Boolean, rewardCoins: Long, adminUid: String) {
+        val newStatus = if (approve) "approved" else "rejected"
+        _allSubmissions.value = _allSubmissions.value.map {
+            if (it.id == submissionId) it.copy(status = newStatus, reviewedAt = System.currentTimeMillis()) else it
         }
-        awaitClose { listener.remove() }
+        client.updateTaskSubmissionStatus(submissionId, newStatus)
     }
 
-    suspend fun processReferralCode(newUserId: String, newUsername: String, code: String, reward: Long): Result<Boolean> {
-        val cleanCode = code.trim().uppercase()
-        if (cleanCode.isBlank()) return Result.success(false)
+    suspend fun updateWithdrawalStatus(withdrawalId: String, newStatus: String, adminNotes: String) {
+        _allWithdrawals.value = _allWithdrawals.value.map {
+            if (it.id == withdrawalId) it.copy(status = newStatus, adminNotes = adminNotes, processedDate = System.currentTimeMillis()) else it
+        }
+        client.updateWithdrawalStatus(withdrawalId, newStatus, adminNotes)
+    }
 
-        return try {
-            val query = db.collection("users").whereEqualTo("referralCode", cleanCode).limit(1).get().await()
-            if (query.isEmpty) return Result.failure(Exception("Referral code not found"))
-
-            val referrerDoc = query.documents.first()
-            val referrerUid = referrerDoc.getString("userId") ?: return Result.failure(Exception("Invalid referrer"))
-
-            if (referrerUid == newUserId) {
-                return Result.failure(Exception("Cannot refer yourself"))
-            }
-
-            val userRef = db.collection("users").document(newUserId)
-            userRef.update(
-                mapOf(
-                    "referredBy" to referrerUid,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
-
-            val refDoc = db.collection("referrals").document()
-            refDoc.set(
-                mapOf(
-                    "referrerUid" to referrerUid,
-                    "referredUid" to newUserId,
-                    "referredUsername" to newUsername,
-                    "rewardAmount" to reward,
-                    "status" to "claimed",
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
-
-            // Credit referrer
-            adminAdjustBalance(referrerUid, reward, "Referral Bonus for inviting $newUsername")
-            // Credit new user welcome bonus
-            adminAdjustBalance(newUserId, reward / 2, "Welcome Referral Bonus")
-
-            Result.success(true)
-        } catch (e: Exception) {
-            Result.failure(e)
+    suspend fun updateUserStatusAdmin(userId: String, newStatus: String) {
+        _allUsers.value = _allUsers.value.map {
+            if (it.userId == userId) it.copy(status = newStatus) else it
         }
     }
+
+    private fun defaultTasks(): List<TaskItem> = listOf(
+        TaskItem(
+            id = "t1",
+            title = "Join Official Community",
+            description = "Join our Telegram community channel for daily bonus codes",
+            category = "social",
+            rewardCoins = 1000L,
+            requirements = "Submit your handle"
+        ),
+        TaskItem(
+            id = "t2",
+            title = "Follow on X (Twitter)",
+            description = "Follow @SmartTapApp and repost the announcement",
+            category = "social",
+            rewardCoins = 750L,
+            requirements = "Submit your X username"
+        ),
+        TaskItem(
+            id = "t3",
+            title = "Complete 500 Taps Today",
+            description = "Reach 500 taps in a single day session",
+            category = "daily",
+            rewardCoins = 500L,
+            requirements = "Completed automatically"
+        ),
+        TaskItem(
+            id = "t4",
+            title = "Invite 3 Friends",
+            description = "Share your referral code and invite 3 friends to join",
+            category = "referral",
+            rewardCoins = 5000L,
+            requirements = "3 referrals required"
+        )
+    )
+
+    private fun defaultBoosters(): List<Booster> = listOf(
+        Booster(
+            id = "b1",
+            name = "Multitap x2",
+            description = "Doubles coin reward on every tap for 5 minutes",
+            multiplier = 2,
+            price = 300L,
+            durationSeconds = 300L,
+            boosterType = "multitap"
+        ),
+        Booster(
+            id = "b2",
+            name = "Energy Surge +500",
+            description = "Increases maximum energy capacity by +500",
+            multiplier = 1,
+            price = 600L,
+            durationSeconds = 600L,
+            boosterType = "energy_boost"
+        ),
+        Booster(
+            id = "b3",
+            name = "Turbo Recharge x3",
+            description = "Triples energy regeneration speed per second",
+            multiplier = 3,
+            price = 500L,
+            durationSeconds = 300L,
+            boosterType = "energy_recovery"
+        )
+    )
+
+    private fun defaultAnnouncements(): List<AnnouncementItem> = listOf(
+        AnnouncementItem(
+            id = "a1",
+            heading = "Welcome to SMART TAP!",
+            description = "Tap the 3D coin, recharge energy, unlock boosters, and climb the leaderboard.",
+            isActive = true
+        )
+    )
 }

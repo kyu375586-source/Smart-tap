@@ -1,22 +1,8 @@
 package com.example.ai
 
-import android.util.Log
-import com.google.firebase.Firebase
-import com.google.firebase.ai.ai
-import com.google.firebase.ai.type.generationConfig
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.delay
 
 class AiTappingAdvisor {
-    private val model by lazy {
-        Firebase.ai.generativeModel(
-            modelName = "gemini-3.8-flash",
-            generationConfig = generationConfig {
-                temperature = 0.7f
-            }
-        )
-    }
 
     suspend fun getTappingStrategy(
         username: String,
@@ -26,63 +12,47 @@ class AiTappingAdvisor {
         totalTaps: Long,
         activeBoosters: List<String>
     ): Result<String> {
-        return try {
-            val prompt = """
-                You are SMART TAP's elite Fintech & Gaming Strategy Advisor.
-                User Stats:
-                - Player: $username
-                - Coin Balance: $coins
-                - Current Energy: $energy / $maxEnergy
-                - Total Lifetime Taps: $totalTaps
-                - Active Boosters: ${if (activeBoosters.isEmpty()) "None" else activeBoosters.joinToString(", ")}
+        delay(400L) // Smooth simulation delay for responsive UX
 
-                Give a concise, punchy 3-bullet action plan for maximum coin earning rate, energy management, and booster strategy. Include estimated time to next milestone. Keep it energetic, motivating, and gamified!
-            """.trimIndent()
+        val energyPercent = if (maxEnergy > 0) ((energy * 100) / maxEnergy).toInt() else 0
+        val boosterStatus = if (activeBoosters.isEmpty()) "No active multipliers" else activeBoosters.joinToString(", ")
 
-            val response = withTimeout(60_000L) {
-                model.generateContent(prompt)
-            }
-            val text = response.text
-            if (!text.isNullOrBlank()) {
-                Result.success(text)
-            } else {
-                Result.failure(Exception("Advisor returned an empty response."))
-            }
-        } catch (e: TimeoutCancellationException) {
-            Log.e("AiAdvisor", "Strategy generation timed out", e)
-            Result.failure(Exception("AI strategy request timed out. Please check network connection."))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e("AiAdvisor", "Failed to generate strategy", e)
-            Result.failure(e)
+        val tip1 = when {
+            energyPercent < 20 -> "⚡ Energy Critical ($energyPercent%): Watch a Rewarded Ad now in Home to immediately restore 100% capacity and snag +250 free coins!"
+            energyPercent < 50 -> "🔋 Energy Reserve at $energyPercent%: Tap in bursts of 50 to let passive regeneration cycle between taps without stalling."
+            else -> "⚡ Prime Energy ($energyPercent%): Dump your energy pool with rapid taps! Perfect moment to activate a Multitap booster."
         }
+
+        val tip2 = when {
+            coins < 500 -> "💰 Growth Phase: Focus on the Tasks tab — complete community and telegram quests to jumpstart your bankroll to 2,500+ coins."
+            coins < 5000 -> "🚀 Scaling Phase: Reinvest 300 coins into the Multitap x2 booster to double your coin yield per tap for 5 full minutes."
+            else -> "💎 Whale Tier: You have $coins coins! Accumulate toward the minimum payout threshold or unlock the Turbo Recharge upgrade."
+        }
+
+        val tip3 = "🎯 Milestone Target: Tap 500 times today to claim the Daily Sprint achievement. Current lifetime taps: $totalTaps."
+
+        val strategyText = """
+            🔥 SMART TAP TACTICAL ADVISORY FOR ${username.uppercase()}
+            
+            • $tip1
+            • $tip2
+            • $tip3
+            
+            ⚡ Active Multipliers: $boosterStatus
+            💡 Pro Tip: Energy regenerates 24/7. Check back every 10 minutes to drain full tank!
+        """.trimIndent()
+
+        return Result.success(strategyText)
     }
 
     suspend fun generateTaskIdea(category: String): Result<Pair<String, String>> {
-        return try {
-            val prompt = """
-                Suggest 1 engaging, realistic viral challenge or task for an online rewards tapping app.
-                Category: $category
-                Respond in format:
-                Title: <Short Title>
-                Description: <Short Instructions under 20 words>
-            """.trimIndent()
-
-            val response = withTimeout(60_000L) {
-                model.generateContent(prompt)
-            }
-            val text = response.text.orEmpty()
-            val title = text.lines().firstOrNull { it.startsWith("Title:", ignoreCase = true) }
-                ?.substringAfter(":")?.trim() ?: "Special Community Quest"
-            val desc = text.lines().firstOrNull { it.startsWith("Description:", ignoreCase = true) }
-                ?.substringAfter(":")?.trim() ?: "Complete the quest and submit proof for bonus coins."
-
-            Result.success(Pair(title, desc))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Result.failure(e)
+        delay(300L)
+        val suggestions = when (category.uppercase()) {
+            "SOCIAL" -> Pair("Retweet Daily Milestone", "Share your latest coin balance screenshot on X and tag #SmartTap.")
+            "DAILY" -> Pair("Golden Hour Sprint", "Perform 300 taps within a single session before energy reaches zero.")
+            "REFERRAL" -> Pair("Squad Builder", "Invite 2 new players with your referral code to earn 5,000 bonus coins.")
+            else -> Pair("Community Advocate", "Leave a 5-star review and submit your profile screenshot for 1,500 coins.")
         }
+        return Result.success(suggestions)
     }
 }

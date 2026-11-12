@@ -1,7 +1,6 @@
 package com.example.ui
 
 import androidx.compose.animation.Crossfade
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -9,15 +8,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.supabase.SupabaseSessionManager
 import com.example.ui.screens.*
 import com.example.ui.viewmodel.MainViewModel
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
 
 enum class AppTab(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     HOME("Home", Icons.Default.Home),
@@ -29,34 +27,26 @@ enum class AppTab(val title: String, val icon: androidx.compose.ui.graphics.vect
 
 @Composable
 fun AppNavigation() {
-    var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
-
-    DisposableEffect(Unit) {
-        val listener = FirebaseAuth.AuthStateListener { auth ->
-            currentUser = auth.currentUser
-        }
-        Firebase.auth.addAuthStateListener(listener)
-        onDispose {
-            Firebase.auth.removeAuthStateListener(listener)
-        }
-    }
+    val context = LocalContext.current
+    val sessionManager = remember { SupabaseSessionManager.getInstance(context) }
+    val currentUser by sessionManager.currentUser.collectAsState()
 
     if (currentUser == null) {
         AuthScreen(
             onAuthSuccess = {
-                currentUser = Firebase.auth.currentUser
+                // Handled reactively via sessionManager.currentUser
             }
         )
     } else {
-        val uid = currentUser!!.uid
-        key(uid) {
+        val user = currentUser!!
+        key(user.id) {
             MainAppContent(
-                userId = uid,
-                displayName = currentUser?.displayName,
-                email = currentUser?.email,
-                photoUrl = currentUser?.photoUrl?.toString(),
+                userId = user.id,
+                displayName = user.username,
+                email = user.email,
+                photoUrl = null,
                 onSignedOut = {
-                    currentUser = null
+                    sessionManager.clearSession()
                 }
             )
         }

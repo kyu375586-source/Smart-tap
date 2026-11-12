@@ -1,13 +1,7 @@
 package com.example.data.model
 
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.DocumentId
-import com.google.firebase.firestore.IgnoreExtraProperties
-import com.google.firebase.firestore.ServerTimestamp
-
-@IgnoreExtraProperties
 data class UserProfile(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val username: String = "",
     val email: String? = null,
@@ -19,45 +13,41 @@ data class UserProfile(
     val totalEarnings: Long = 0L,
     val role: String = "user",
     val status: String = "active",
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
-@IgnoreExtraProperties
 data class UserBalance(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val coinBalance: Long = 0L,
     val withdrawableBalance: Long = 0L,
     val lifetimeCoins: Long = 0L,
     val pendingCoins: Long = 0L,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
-@IgnoreExtraProperties
 data class EnergyRecord(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val currentEnergy: Long = 1000L,
     val maxEnergy: Long = 1000L,
     val lastRechargeTime: Long = System.currentTimeMillis(),
     val rechargeRatePerSec: Long = 3L,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
-@IgnoreExtraProperties
 data class DailyCheckin(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val streakCount: Int = 0,
     val lastClaimDate: String = "",
     val totalClaimedDays: Int = 0,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
-@IgnoreExtraProperties
 data class TaskItem(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val title: String = "",
     val description: String = "",
     val category: String = "daily",
@@ -66,12 +56,11 @@ data class TaskItem(
     val iconName: String = "star",
     val isActive: Boolean = true,
     val requirements: String = "",
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: Long = System.currentTimeMillis()
 )
 
-@IgnoreExtraProperties
 data class TaskSubmission(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val taskId: String = "",
     val userId: String = "",
     val username: String = "",
@@ -80,14 +69,13 @@ data class TaskSubmission(
     val proofUrl: String = "",
     val status: String = "pending", // pending, approved, rejected
     val rewardCoins: Long = 0L,
-    @ServerTimestamp val submittedAt: Timestamp? = null,
-    @ServerTimestamp val reviewedAt: Timestamp? = null,
+    val submittedAt: Long = System.currentTimeMillis(),
+    val reviewedAt: Long? = null,
     val reviewedBy: String? = null
 )
 
-@IgnoreExtraProperties
 data class Booster(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val name: String = "",
     val description: String = "",
     val multiplier: Int = 2,
@@ -98,20 +86,18 @@ data class Booster(
     val isActive: Boolean = true
 )
 
-@IgnoreExtraProperties
 data class BoosterPurchase(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val boosterId: String = "",
     val boosterName: String = "",
-    @ServerTimestamp val purchasedAt: Timestamp? = null,
-    val expiresAt: Timestamp? = null,
+    val purchasedAt: Long = System.currentTimeMillis(),
+    val expiresAt: Long? = null,
     val isActive: Boolean = true
 )
 
-@IgnoreExtraProperties
 data class WithdrawalRequest(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val username: String = "",
     val coinAmount: Long = 0L,
@@ -122,48 +108,44 @@ data class WithdrawalRequest(
     val status: String = "Pending", // Pending, Under Review, Approved, Processing, Completed, Rejected
     val adminNotes: String = "",
     val transactionRef: String = "",
-    @ServerTimestamp val requestDate: Timestamp? = null,
-    @ServerTimestamp val processedDate: Timestamp? = null
+    val requestDate: Long = System.currentTimeMillis(),
+    val processedDate: Long? = null
 )
 
-@IgnoreExtraProperties
 data class TransactionItem(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val type: String = "tap_reward",
     val amount: Long = 0L,
     val description: String = "",
     val status: String = "completed",
     val balanceAfter: Long = 0L,
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: Long = System.currentTimeMillis()
 )
 
-@IgnoreExtraProperties
 data class ReferralItem(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val referrerUid: String = "",
     val referredUid: String = "",
     val referredUsername: String = "",
     val rewardAmount: Long = 500L,
     val status: String = "claimed",
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: Long = System.currentTimeMillis()
 )
 
-@IgnoreExtraProperties
 data class AnnouncementItem(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val heading: String = "",
     val description: String = "",
     val imageUrl: String = "",
     val linkUrl: String = "",
     val actionText: String = "Learn More",
     val isActive: Boolean = true,
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: Long = System.currentTimeMillis()
 )
 
-@IgnoreExtraProperties
 data class AppConfiguration(
-    @DocumentId val id: String = "default",
+    val id: String = "default",
     val appName: String = "Smart Tap",
     val coinsPerTap: Long = 1L,
     val baseEnergy: Long = 1000L,
@@ -176,16 +158,15 @@ data class AppConfiguration(
     val maintenanceMode: Boolean = false,
     val bannerNotice: String = "",
     val updatedBy: String = "",
-    @ServerTimestamp val updatedAt: Timestamp? = null,
+    val updatedAt: Long = System.currentTimeMillis(),
     val version: Long = 1L
 )
 
-@IgnoreExtraProperties
 data class AdminActivityLog(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val adminUid: String = "",
     val adminEmail: String = "",
     val action: String = "",
     val details: String = "",
-    @ServerTimestamp val timestamp: Timestamp? = null
+    val timestamp: Long = System.currentTimeMillis()
 )

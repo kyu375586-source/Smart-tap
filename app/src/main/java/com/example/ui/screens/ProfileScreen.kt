@@ -24,7 +24,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.credentials.CredentialManager
 import com.example.auth.AuthManager
 import com.example.data.model.Booster
 import com.example.ui.viewmodel.MainViewModel
@@ -38,7 +37,6 @@ fun ProfileScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val credentialManager = remember { CredentialManager.create(context) }
 
     val user by viewModel.userProfile.collectAsState()
     val balance by viewModel.userBalance.collectAsState()
@@ -365,7 +363,7 @@ fun ProfileScreen(
             ) {
                 OutlinedButton(
                     onClick = {
-                        AuthManager.signOut(credentialManager, coroutineScope, onSignedOut)
+                        AuthManager.signOut(context, coroutineScope, onSignedOut)
                     },
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("sign_out_button"),
                     shape = RoundedCornerShape(12.dp),
